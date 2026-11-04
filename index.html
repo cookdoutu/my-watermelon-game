@@ -1,62 +1,302 @@
+
 <!doctype html>
 <html lang="ja">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>マイ・スイカゲーム</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f7f3e9;color:#3d342b;font-family:system-ui,-apple-system,sans-serif}
+*{box-sizing:border-box}
+body{margin:0;background:#f7f3e9;color:#3d342b;font-family:system-ui,sans-serif}
 main{width:min(100%,480px);margin:auto;padding:12px;min-height:100dvh;display:flex;flex-direction:column;gap:10px}
-header{display:flex;justify-content:space-between;align-items:center}h1{font-size:21px;margin:0}.stats{font-weight:800}
-button{border:0;border-radius:12px;padding:10px 14px;background:#5d8b57;color:white;font-weight:700;font-size:14px}
-canvas{width:100%;aspect-ratio:420/540;background:#fffdf7;border:3px solid #8b735c;border-radius:16px;touch-action:none;display:block}
-.hint{text-align:center;font-size:13px;color:#776b5d;margin:0}#status{text-align:center;font-size:13px;min-height:20px}
+header{display:flex;justify-content:space-between;align-items:center}
+h1{font-size:21px;margin:0}
+.stats{font-weight:800}
+button{border:0;border-radius:12px;padding:13px 22px;background:#5d8b57;color:white;font-weight:700;font-size:17px}
+button:disabled{opacity:.45}
+#drop{background:#e58a38;width:100%;font-size:20px}
+canvas{width:100%;aspect-ratio:420/540;background:#fffdf7;border:3px solid #8b735c;border-radius:16px;touch-action:manipulation;display:block}
+.hint{text-align:center;font-size:13px;color:#776b5d;margin:0}
+#status{text-align:center;font-size:13px;min-height:20px}
 </style>
 </head>
-<body><main>
-<header><h1 id="title">マイ・スイカゲーム</h1><div class="stats">得点 <span id="score">0</span></div></header>
+<body>
+<main>
+<header>
+<h1 id="title">マイ・スイカゲーム</h1>
+<div class="stats">得点 <span id="score">0</span></div>
+</header>
 <canvas id="game" width="420" height="540"></canvas>
-<p class="hint">左右に動かして位置を決めて、タップで落とそう！同じ画像が合体するよ。</p>
-<div style="display:flex;justify-content:center"><button id="restart">やり直す</button></div>
+<p class="hint">①画面をタップして位置を決める<br>②「落とす！」を押して落下させる</p>
+<button id="drop">落とす！</button>
+<div style="display:flex;justify-content:center">
+<button id="restart">やり直す</button>
+</div>
 <div id="status">読み込み中…</div>
 </main>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
 <script>
 (async()=>{
-const status=document.getElementById('status'),title=document.getElementById('title');
+const status=document.getElementById('status');
+const title=document.getElementById('title');
+const dropButton=document.getElementById('drop');
 const defaults=['🍒','🍓','🍇','🍊','🍎','🍐','🍈','🍉'];
-let pictures=defaults.map(()=>null);
+let pictures=Array(8).fill(null);
+
 if(window.APP_CONFIG?.SUPABASE_URL && window.APP_CONFIG?.SUPABASE_ANON_KEY){
  try{
   const sb=window.supabase.createClient(APP_CONFIG.SUPABASE_URL,APP_CONFIG.SUPABASE_ANON_KEY);
   const {data,error}=await sb.from('game_config').select('title,images').eq('id',1).single();
-  if(!error&&data){title.textContent=data.title||'マイ・スイカゲーム';pictures=(data.images||[]).map(x=>x||null);while(pictures.length<8)pictures.push(null);status.textContent='';}
-  else status.textContent='初期設定中です。管理者が画像を設定すると反映されます。';
+  if(!error&&data){
+   title.textContent=data.title||'マイ・スイカゲーム';
+   pictures=(data.images||[]).map(x=>x||null);
+   while(pictures.length<8)pictures.push(null);
+   status.textContent='';
+  }else status.textContent='初期設定中です。';
  }catch(e){status.textContent='設定を読み込めませんでした。';}
 }else status.textContent='公開設定がまだ完了していません。';
-const canvas=document.getElementById('game'),ctx=canvas.getContext('2d'),W=420,H=540,wall=18,floor=510,dropY=66;
-const radii=[17,22,28,35,43,52,63,76],emoji=defaults;
+
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+const W=420,H=540,wall=18,floor=510,dropY=66;
+const radii=[17,22,28,35,43,52,63,76];
 const imgs=Array(8).fill(null);
-pictures.forEach((url,i)=>{if(url){const im=new Image();im.crossOrigin='anonymous';im.onload=()=>imgs[i]=im;im.src=url;}});
-let fruits=[],score=0,aimX=W/2,nextType=0,over=false,lastDrop=0,merging=[];
-function reset(){fruits=[];score=0;over=false;aimX=W/2;nextType=Math.floor(Math.random()*3);document.getElementById('score').textContent=0;status.textContent='';}
-document.getElementById('restart').onclick=reset;
-function add(x,y,t){let r=radii[t];fruits.push({x:Math.max(wall+r,Math.min(W-wall-r,x)),y,r,t,vx:0,vy:0,dead:false});}
-function px(e){let r=canvas.getBoundingClientRect();return (e.clientX-r.left)/r.width*W;}
-canvas.addEventListener('pointermove',e=>aimX=px(e));
-canvas.addEventListener('pointerdown',e=>{e.preventDefault();if(over||Date.now()-lastDrop<420)return;lastDrop=Date.now();add(aimX,dropY,nextType);nextType=Math.floor(Math.random()*3);});
-function merge(a,b){if(a.t!==b.t||a.t>=7||a.dead||b.dead)return false;a.dead=b.dead=true;let t=a.t+1;fruits.push({x:(a.x+b.x)/2,y:(a.y+b.y)/2,r:radii[t],t,vx:0,vy:-1,dead:false});score+=(t+1)*10;document.getElementById('score').textContent=score;return true;}
-function physics(){
- for(const f of fruits){if(f.dead)continue;f.vy=Math.min(f.vy+.30,9);f.x+=f.vx;f.y+=f.vy;f.vx*=.995;
-  if(f.x-f.r<wall){f.x=wall+f.r;f.vx=Math.abs(f.vx)*.3}if(f.x+f.r>W-wall){f.x=W-wall-f.r;f.vx=-Math.abs(f.vx)*.3}
-  if(f.y+f.r>floor){f.y=floor-f.r;f.vy*=-.20;if(Math.abs(f.vy)<.7)f.vy=0}
+
+pictures.forEach((url,i)=>{
+ if(url){
+  const im=new Image();
+  im.onload=()=>imgs[i]=im;
+  im.src=url;
  }
- for(let k=0;k<3;k++)for(let i=0;i<fruits.length;i++)for(let j=i+1;j<fruits.length;j++){let a=fruits[i],b=fruits[j];if(a.dead||b.dead)continue;let dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy),min=a.r+b.r;if(d<min&&d>0){if(a.t===b.t&&a.t<7){merge(a,b);continue;}let o=(min-d)/2,nx=dx/d,ny=dy/d;a.x-=nx*o;b.x+=nx*o;a.y-=ny*o;b.y+=ny*o;let rel=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;if(rel<0){let p=-rel*.32;a.vx-=p*nx;a.vy-=p*ny;b.vx+=p*nx;b.vy+=p*ny;}}}
- fruits=fruits.filter(f=>!f.dead);
- if(fruits.some(f=>f.y-f.r<18&&f.y<dropY+5)){over=true;status.textContent='ゲームオーバー！「やり直す」でもう一度';}
+});
+
+let fruits=[];
+let score=0;
+let aimX=W/2;
+let nextType=0;
+let result=null;
+let lastDrop=0;
+
+function reset(){
+ fruits=[];
+ score=0;
+ result=null;
+ aimX=W/2;
+ nextType=Math.floor(Math.random()*3);
+ document.getElementById('score').textContent='0';
+ status.textContent='';
+ dropButton.disabled=false;
 }
-function drawFruit(f,alpha=1){ctx.save();ctx.globalAlpha=alpha;ctx.beginPath();ctx.arc(f.x,f.y,f.r,0,Math.PI*2);ctx.fillStyle='white';ctx.fill();ctx.clip();let im=imgs[f.t];if(im){let s=Math.max(f.r*2/im.width,f.r*2/im.height);ctx.drawImage(im,f.x-im.width*s/2,f.y-im.height*s/2,im.width*s,im.height*s);}else{ctx.font=`${f.r*1.5}px sans-serif`;ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText(emoji[f.t],f.x,f.y+2);}ctx.restore();ctx.beginPath();ctx.arc(f.x,f.y,f.r,0,Math.PI*2);ctx.strokeStyle='#0002';ctx.lineWidth=2;ctx.stroke();}
-function draw(){ctx.clearRect(0,0,W,H);ctx.fillStyle='#fffdf7';ctx.fillRect(0,0,W,H);ctx.fillStyle='#8b735c';ctx.fillRect(0,0,wall,H);ctx.fillRect(W-wall,0,wall,H);ctx.fillRect(0,floor,W,H-floor);ctx.setLineDash([6,6]);ctx.strokeStyle='#d8c8b3';ctx.beginPath();ctx.moveTo(wall,24);ctx.lineTo(W-wall,24);ctx.stroke();ctx.setLineDash([]);if(!over)drawFruit({x:Math.max(wall+radii[nextType],Math.min(W-wall-radii[nextType],aimX)),y:dropY,r:radii[nextType],t:nextType},.4);fruits.forEach(f=>drawFruit(f));}
-function loop(){physics();draw();requestAnimationFrame(loop)}reset();loop();
+
+document.getElementById('restart').onclick=reset;
+
+function getCanvasX(e){
+ const r=canvas.getBoundingClientRect();
+ return (e.clientX-r.left)/r.width*W;
+}
+
+// 画面をタップしただけでは落下しない
+canvas.addEventListener('pointerdown',e=>{
+ e.preventDefault();
+ if(result)return;
+ const r=radii[nextType];
+ aimX=Math.max(wall+r,Math.min(W-wall-r,getCanvasX(e)));
+});
+
+// 落とすボタンを押したときだけ落下
+dropButton.addEventListener('click',()=>{
+ if(result)return;
+ if(Date.now()-lastDrop<420)return;
+ lastDrop=Date.now();
+ add(aimX,dropY,nextType);
+ nextType=Math.floor(Math.random()*3);
+});
+
+function add(x,y,t){
+ const r=radii[t];
+ fruits.push({
+  x:Math.max(wall+r,Math.min(W-wall-r,x)),
+  y,r,t,vx:0,vy:0,dead:false
+ });
+}
+
+function merge(a,b){
+ if(a.t!==b.t||a.dead||b.dead)return false;
+ a.dead=true;
+ b.dead=true;
+ const newType=a.t+1;
+ score+=(newType+1)*10;
+ document.getElementById('score').textContent=score;
+
+ if(newType===8){
+  result='win';
+  status.textContent='ゲームクリア！おめでとう！！';
+  dropButton.disabled=true;
+  return true;
+ }
+
+ fruits.push({
+  x:(a.x+b.x)/2,
+  y:(a.y+b.y)/2,
+  r:radii[newType],
+  t:newType,
+  vx:0,vy:-1,dead:false
+ });
+ return true;
+}
+
+function physics(){
+ if(result)return;
+
+ for(const f of fruits){
+  if(f.dead)continue;
+  f.vy=Math.min(f.vy+.30,9);
+  f.x+=f.vx;
+  f.y+=f.vy;
+  f.vx*=.995;
+
+  if(f.x-f.r<wall){
+   f.x=wall+f.r;
+   f.vx=Math.abs(f.vx)*.3;
+  }
+  if(f.x+f.r>W-wall){
+   f.x=W-wall-f.r;
+   f.vx=-Math.abs(f.vx)*.3;
+  }
+  if(f.y+f.r>floor){
+   f.y=floor-f.r;
+   f.vy*=-.20;
+   if(Math.abs(f.vy)<.7)f.vy=0;
+  }
+ }
+
+ for(let k=0;k<3&&!result;k++){
+  for(let i=0;i<fruits.length&&!result;i++){
+   for(let j=i+1;j<fruits.length&&!result;j++){
+    const a=fruits[i],b=fruits[j];
+    if(a.dead||b.dead)continue;
+    const dx=b.x-a.x,dy=b.y-a.y;
+    const d=Math.hypot(dx,dy);
+    const min=a.r+b.r;
+
+    if(d<min&&d>0){
+     if(a.t===b.t){
+      merge(a,b);
+      continue;
+     }
+     const o=(min-d)/2;
+     const nx=dx/d,ny=dy/d;
+     a.x-=nx*o;b.x+=nx*o;
+     a.y-=ny*o;b.y+=ny*o;
+     const rel=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
+     if(rel<0){
+      const p=-rel*.32;
+      a.vx-=p*nx;a.vy-=p*ny;
+      b.vx+=p*nx;b.vy+=p*ny;
+     }
+    }
+   }
+  }
+ }
+
+ fruits=fruits.filter(f=>!f.dead);
+
+ if(!result&&fruits.some(f=>f.y-f.r<18&&f.y<dropY+5)){
+  result='over';
+  status.textContent='ゲームオーバー！';
+  dropButton.disabled=true;
+ }
+}
+
+function drawFruit(f,alpha=1){
+ ctx.save();
+ ctx.globalAlpha=alpha;
+ ctx.beginPath();
+ ctx.arc(f.x,f.y,f.r,0,Math.PI*2);
+ ctx.fillStyle='white';
+ ctx.fill();
+ ctx.clip();
+
+ const im=imgs[f.t];
+ if(im){
+  const s=Math.max(f.r*2/im.width,f.r*2/im.height);
+  ctx.drawImage(im,f.x-im.width*s/2,f.y-im.height*s/2,im.width*s,im.height*s);
+ }else{
+  ctx.font=`${f.r*1.5}px sans-serif`;
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+  ctx.fillText(defaults[f.t],f.x,f.y+2);
+ }
+ ctx.restore();
+
+ ctx.beginPath();
+ ctx.arc(f.x,f.y,f.r,0,Math.PI*2);
+ ctx.strokeStyle='#0002';
+ ctx.lineWidth=2;
+ ctx.stroke();
+}
+
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ ctx.fillStyle='#fffdf7';
+ ctx.fillRect(0,0,W,H);
+
+ ctx.fillStyle='#8b735c';
+ ctx.fillRect(0,0,wall,H);
+ ctx.fillRect(W-wall,0,wall,H);
+ ctx.fillRect(0,floor,W,H-floor);
+
+ ctx.setLineDash([6,6]);
+ ctx.strokeStyle='#d8c8b3';
+ ctx.beginPath();
+ ctx.moveTo(wall,24);
+ ctx.lineTo(W-wall,24);
+ ctx.stroke();
+ ctx.setLineDash([]);
+
+ if(!result){
+  const r=radii[nextType];
+  drawFruit({x:aimX,y:dropY,r,t:nextType},.4);
+ }
+
+ fruits.forEach(f=>drawFruit(f));
+
+ if(result){
+  ctx.fillStyle='rgba(35,25,20,.78)';
+  ctx.fillRect(18,18,W-36,H-36);
+  ctx.textAlign='center';
+  ctx.textBaseline='middle';
+
+  if(result==='win'){
+   ctx.font='bold 39px sans-serif';
+   ctx.fillStyle='#ffe58a';
+   ctx.fillText('CLEAR!',W/2,H/2-55);
+   ctx.font='bold 28px sans-serif';
+   ctx.fillStyle='white';
+   ctx.fillText('おめでとう！！',W/2,H/2+5);
+   ctx.font='17px sans-serif';
+   ctx.fillText('最後のフルーツが完成したよ！',W/2,H/2+55);
+  }else{
+   ctx.font='bold 36px sans-serif';
+   ctx.fillStyle='white';
+   ctx.fillText('GAME OVER',W/2,H/2-25);
+   ctx.font='19px sans-serif';
+   ctx.fillText('もう一度挑戦してね！',W/2,H/2+30);
+  }
+ }
+}
+
+function loop(){
+ physics();
+ draw();
+ requestAnimationFrame(loop);
+}
+
+reset();
+loop();
 })();
-</script></body></html>
+</script>
+</body>
+</html>
